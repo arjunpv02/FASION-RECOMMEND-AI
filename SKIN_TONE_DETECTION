@@ -1,0 +1,242 @@
+import numpy as np
+import cv2
+from sklearn.cluster import KMeans
+from collections import Counter
+import imutils
+import pprint
+from matplotlib import pyplot as plt
+
+def extractSkin(image):
+    """
+    Extracts skin from an image using HSV color space and a series of morphological operations.
+
+    Parameters:
+        image (numpy.ndarray): Input image in BGR format.
+
+    Returns:
+        numpy.ndarray: Image with skin areas highlighted in BGR format.
+    """
+    img = image.copy()
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+    lower_threshold = np.array([0, 48, 80], dtype=np.uint8)
+    upper_threshold = np.array([20, 255, 255], dtype=np.uint8)
+
+    skinMask = cv2.inRange(img, lower_threshold, upper_threshold)
+    skinMask = cv2.GaussianBlur(skinMask, (3, 3), 0)
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    skinMask = cv2.erode(skinMask, kernel, iterations=2)
+    skinMask = cv2.dilate(skinMask, kernel, iterations=2)
+    skinMask = cv2.morphologyEx(skinMask, cv2.MORPH_OPEN, kernel)
+    skinMask = cv2.morphologyEx(skinMask, cv2.MORPH_CLOSE, kernel)
+
+    skin = cv2.bitwise_and(img, img, mask=skinMask)
+    return cv2.cvtColor(skin, cv2.COLOR_HSV2BGR)
+
+def removeBlack(estimator_labels, estimator_cluster):
+    """
+    Removes black color from the cluster data.
+
+    Parameters:
+        estimator_labels (numpy.ndarray): Labels assigned by KMeans clustering.
+        estimator_cluster (numpy.ndarray): Cluster centers (colors) found by KMeans.
+
+    Returns:
+        tuple: Updated occurrence counter, cluster centers, and a boolean indicating if black was removed.
+    """
+    occurance_counter = Counter(estimator_labels)
+    hasBlack = False
+    compare = lambda x, y: Counter(x) == Counter(y)
+    
+    for x in occurance_counter.most_common(len(estimator_cluster)):
+        color = [int(i) for i in estimator_cluster[x[0]].tolist()]
+        if compare(color, [0, 0, 0]):
+            del occurance_counter[x[0]]
+            estimator_cluster = np.delete(estimator_cluster, x[0], 0)
+            hasBlack = True
+            break
+
+    return occurance_counter, estimator_cluster, hasBlack
+
+def getColorInformation(estimator_labels, estimator_cluster, hasThresholding=False):
+    """
+    Extracts color information from KMeans clustering results.
+
+    Parameters:
+        estimator_labels (numpy.ndarray): Labels assigned by KMeans clustering.
+        estimator_cluster (numpy.ndarray): Cluster centers (colors) found by KMeans.
+        hasThresholding (bool): Indicates if thresholding was applied to remove black.
+
+    Returns:
+        list: List of dictionaries containing color information.
+    """
+    occurance_counter = None
+    colorInformation = []
+    hasBlack = False
+
+    if hasThresholding:
+        occurance_counter, estimator_cluster, hasBlack = removeBlack(estimator_labels, estimator_cluster)
+    else:
+        occurance_counter = Counter(estimator_labels)
+
+    totalOccurance = sum(occurance_counter.values())
+
+    for x in occurance_counter.most_common(len(estimator_cluster)):
+        index = int(x[0])
+        if hasThresholding and hasBlack and index != 0:
+            index -= 1
+        color = estimator_cluster[index].tolist()
+        color_percentage = x[1] / totalOccurance
+        colorInfo = {"cluster_index": index, "color": color, "color_percentage": color_percentage}
+        colorInformation.append(colorInfo)
+
+    return colorInformation
+
+def plotColorBar(colorInformation):
+    """
+    Creates a color bar visualization from color information.
+
+    Parameters:
+        colorInformation (list): List of dictionaries containing color information.
+
+    Returns:
+        numpy.ndarray: Image showing the color bar.
+    """
+    color_bar = np.zeros((100, 500, 3), dtype="uint8")
+    top_x = 0
+
+    for x in colorInformation:
+        bottom_x = top_x + (x["color_percentage"] * color_bar.shape[1])
+        color = tuple(map(int, x["color"]))
+        cv2.rectangle(color_bar, (int(top_x), 0), (int(bottom_x), color_bar.shape[0]), color, -1)
+        top_x = bottom_x
+
+    return color_bar
+
+def extractDominantColor(image, number_of_colors=5, hasThresholding=False):
+    """
+    Extracts dominant colors from an image using KMeans clustering.
+
+    Parameters:
+        image (numpy.ndarray): Input image in BGR format.
+        number_of_colors (int): Number of colors to find.
+        hasThresholding (bool): Indicates if thresholding was applied.
+
+    Returns:
+        list: List of dictionaries containing dominant color information.
+    """
+    if hasThresholding:
+        number_of_colors += 1
+
+    img = image.copy()
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = img.reshape((img.shape[0] * img.shape[1]), 3)
+    estimator = KMeans(n_clusters=number_of_colors, random_state=0)
+    estimator.fit(img)
+    colorInformation = getColorInformation(estimator.labels_, estimator.cluster_centers_, hasThresholding)
+    return colorInformation
+
+def pretty_print_data(color_info):
+    """
+    Prints color information in a readable format.
+
+    Parameters:
+        color_info (list): List of dictionaries containing color information.
+    """
+    for x in color_info:
+        print(pprint.pformat(x))
+        print()
+
+def define_skin_color_scale():
+    """
+    Defines a range of skin tones from dark brown to white.
+
+    Returns:
+        list: List of dictionaries containing skin tone names and colors in LAB color space.
+    """
+    skin_color_scale = [
+        {"name": "Very Dark", "color": [60, 20, 20]},
+        {"name": "Dark", "color": [85, 60, 50]},
+        {"name": "Medium Dark", "color": [130, 85, 70]},
+        {"name": "Medium", "color": [160, 110, 90]},
+        {"name": "Light Medium", "color": [200, 140, 120]},
+        {"name": "Fair", "color": [230, 190, 175]},
+        {"name": "Very Fair", "color": [255, 220, 200]}
+    ]
+    
+    for tone in skin_color_scale:
+        rgb_color = np.uint8([[tone["color"]]])
+        lab_color = cv2.cvtColor(rgb_color, cv2.COLOR_RGB2LAB)[0][0]
+        tone["color"] = lab_color
+    
+    return skin_color_scale
+
+def find_closest_skin_tone(dominant_color, skin_color_scale):
+    """
+    Finds the closest skin tone from the predefined scale based on the dominant color.
+
+    Parameters:
+        dominant_color (list): Dominant color in RGB format.
+        skin_color_scale (list): List of dictionaries containing skin tone names and colors in LAB color space.
+
+    Returns:
+        str: Name of the closest skin tone.
+    """
+    dominant_color = np.uint8([[dominant_color]])
+    dominant_color_lab = cv2.cvtColor(dominant_color, cv2.COLOR_RGB2LAB)[0][0]
+    min_distance = float('inf')
+    closest_tone = None
+
+    for tone in skin_color_scale:
+        distance = np.linalg.norm(dominant_color_lab - np.array(tone["color"]))
+        if distance < min_distance:
+            min_distance = distance
+            closest_tone = tone["name"]
+
+    return closest_tone
+
+# Main script
+image_filename = '/content/gettyimages-674401255-612x612.jpg'  # Replace with your image file name
+image = cv2.imread(image_filename)
+
+if image is None:
+    raise FileNotFoundError("The image file was not found. Please check the file path and try again.")
+
+image = imutils.resize(image, width=250)
+plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+plt.show()
+
+skin = extractSkin(image)
+plt.imshow(cv2.cvtColor(skin, cv2.COLOR_BGR2RGB))
+plt.show()
+
+dominantColors = extractDominantColor(skin, hasThresholding=True)
+print("Color Information")
+pretty_print_data(dominantColors)
+
+print("Color Bar")
+color_bar = plotColorBar(dominantColors)
+plt.axis("off")
+plt.imshow(color_bar)
+plt.show()
+
+dominant_skin_color = dominantColors[0]['color']
+print("Dominant Skin Color (RGB):", dominant_skin_color)
+
+color_patch = np.zeros((100, 100, 3), dtype="uint8")
+color_patch[:] = dominant_skin_color
+plt.axis("off")
+plt.imshow(color_patch)
+plt.show()
+
+skin_color_scale = define_skin_color_scale()
+closest_skin_tone = find_closest_skin_tone(dominant_skin_color, skin_color_scale)
+print("Dominant Skin Color (RGB):", dominant_skin_color)
+print("Closest Skin Tone:", closest_skin_tone)
+
+color_patch = np.zeros((100, 100, 3), dtype="uint8")
+color_patch[:] = dominant_skin_color
+plt.axis("off")
+plt.imshow(color_patch)
+plt.show()

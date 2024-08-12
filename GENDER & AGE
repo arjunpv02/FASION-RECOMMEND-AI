@@ -1,0 +1,79 @@
+#GENDER AND AGE DETECTION
+
+import cv2
+import numpy as np
+from google.colab import files
+import matplotlib.pyplot as plt
+
+# Step 1: Upload the model files to Colab
+# Upload the model files: deploy_age.prototxt, age_net.caffemodel, deploy_gender.prototxt, gender_net.caffemodel
+uploaded = files.upload()
+
+# Step 2: Define paths to the uploaded model files
+age_proto_path = "deploy_age.prototxt"
+age_model_path = "age_net.caffemodel"
+gender_proto_path = "deploy_gender.prototxt"
+gender_model_path = "gender_net.caffemodel"
+
+# Step 3: Load pre-trained models for age and gender prediction
+age_net = cv2.dnn.readNetFromCaffe(age_proto_path, age_model_path)
+gender_net = cv2.dnn.readNetFromCaffe(gender_proto_path, gender_model_path)
+
+# Step 4: Define the age and gender labels
+age_list = ['(0-2)', '(4-6)', '(8-12)', '(15-20)', '(25-32)', '(38-43)', '(48-53)', '(60-100)']
+gender_list = ['Male', 'Female']
+
+def predict_age_and_gender(face_image):
+    """
+    Predict the age and gender of the person in the face image.
+
+    Parameters:
+    face_image (numpy.ndarray): Image of the face in BGR color space.
+
+    Returns:
+    tuple: Predicted gender and age.
+    """
+    MODEL_MEAN_VALUES = (78.4263377603, 87.7689143744, 114.895847746)
+    blob = cv2.dnn.blobFromImage(face_image, 1.0, (227, 227), MODEL_MEAN_VALUES, swapRB=False)
+
+    # Predict Gender
+    gender_net.setInput(blob)
+    gender_preds = gender_net.forward()
+    gender = gender_list[gender_preds[0].argmax()]
+
+    # Predict Age
+    age_net.setInput(blob)
+    age_preds = age_net.forward()
+    age = age_list[age_preds[0].argmax()]
+
+    return gender, age
+
+# Step 5: Upload and process an image
+uploaded_image = files.upload()
+image_filename = list(uploaded_image.keys())[0]
+
+# Load the image
+image = cv2.imread(image_filename)
+
+if image is None:
+    raise FileNotFoundError("The image file was not found. Please check the file path and try again.")
+
+# Detect faces in the image
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+
+# Predict age and gender for each detected face
+for (x, y, w, h) in faces:
+    face_img = image[y:y + h, x:x + w]
+    gender, age = predict_age_and_gender(face_img)
+    print(f"Gender: {gender}, Age: {age}")
+
+    # Draw a rectangle around the face and display the gender and age
+    cv2.rectangle(image, (x, y), (x + w, y + h), (255, 0, 0), 2)
+    cv2.putText(image, f"{gender}, {age}", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
+
+# Display the output image
+plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+plt.axis('off')
+plt.show()
